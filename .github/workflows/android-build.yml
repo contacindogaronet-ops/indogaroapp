@@ -11,7 +11,6 @@ jobs:
     name: Compile Android App
     runs-on: ubuntu-latest
     
-    # DEKLARASI KRUSIAL: Paksa mesin CI/CD mengeksekusi bash di dalam sub-direktori
     defaults:
       run:
         working-directory: ./indogaroapp
@@ -23,7 +22,8 @@ jobs:
         submodules: recursive
 
     - name: Setup Java 17
-      uses: actions/setup-java@v3
+      # PEMBARUAN: Menggunakan setup-java versi 4
+      uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
@@ -39,7 +39,8 @@ jobs:
       run: ./gradlew assembleDevDebug --stacktrace
 
     - name: Upload APK Artifact
-      uses: actions/upload-artifact@v3
+      # PERBAIKAN FATAL: Menggunakan upload-artifact versi 4
+      uses: actions/upload-artifact@v4
       with:
         name: JARGO-Core-Dev
         path: indogaroapp/app/build/outputs/apk/dev/debug/*.apk
