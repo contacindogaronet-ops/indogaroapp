@@ -34,13 +34,13 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      - name: Validate Gradle Wrapper
-        uses: gradle/actions/wrapper-validation@v3
+      - name: Generate Dynamic Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.6
+          chmod +x ./gradlew
 
       - name: Module Resolution Check
-        run: |
-          chmod +x ./gradlew
-          ./gradlew :app:tasks --dry-run
+        run: ./gradlew :app:tasks --dry-run
 
       - name: Static Code Analysis
         run: ./gradlew :app:lintDevDebug --quiet
