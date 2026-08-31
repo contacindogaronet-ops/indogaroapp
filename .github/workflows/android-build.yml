@@ -1,4 +1,4 @@
-name: JARGO Core Quality & Build Pipeline
+name: JARGO Core Quality and Build Pipeline
 
 on:
   push:
@@ -9,12 +9,11 @@ on:
     branches: [ "main" ]
 
 env:
-  # Optimasi isolasi memori & matikan daemon statis
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2048m -Dorg.gradle.daemon=false"
 
 jobs:
   verify-and-build:
-    name: Gatekeeper & Build System
+    name: Gatekeeper and Build System
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -23,33 +22,33 @@ jobs:
         working-directory: ./indogaroapp
 
     steps:
-      - name: 🚀 Checkout Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: ☕ Setup Java Development Kit (JDK 17)
+      - name: Setup Java Development Kit
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: 'gradle'
 
-      - name: 🔒 Integrity Check: Validate Gradle Wrapper
-        uses: gradle/wrapper-validation-action@v2
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v3
 
-      - name: 🛡️ Pre-flight Check: Module Resolution
+      - name: Module Resolution Check
         run: |
           chmod +x ./gradlew
           ./gradlew :app:tasks --dry-run
 
-      - name: 🔬 Quality Gate: Static Code Analysis (Lint)
+      - name: Static Code Analysis
         run: ./gradlew :app:lintDevDebug --quiet
 
-      - name: 🏗️ Execute Build: Assemble Core Engine
+      - name: Assemble Core Engine
         run: ./gradlew :app:assembleDevDebug --stacktrace --parallel
 
-      - name: 📦 Upload Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: success()
         with:
