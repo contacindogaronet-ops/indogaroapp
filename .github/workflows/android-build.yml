@@ -10,6 +10,11 @@ jobs:
   build:
     name: Compile Android App
     runs-on: ubuntu-latest
+    
+    # DEKLARASI KRUSIAL: Paksa mesin CI/CD mengeksekusi bash di dalam sub-direktori
+    defaults:
+      run:
+        working-directory: ./indogaroapp
 
     steps:
     - name: Checkout Repository
@@ -37,4 +42,4 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: JARGO-Core-Dev
-        path: app/build/outputs/apk/dev/debug/*.apk
+        path: indogaroapp/app/build/outputs/apk/dev/debug/*.apk
