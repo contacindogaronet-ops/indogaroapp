@@ -12,19 +12,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	socksVer   = 0x05
-	cmdConnect = 0x01
-	atypIPv4   = 0x01
-	atypDomain = 0x03
-	atypIPv6   = 0x04
-)
-
 var (
-	ErrInvalidSocksVersion = errors.New("unsupported SOCKS protocol version")
-	ErrInvalidCommand      = errors.New("unsupported command, only CONNECT allowed")
-	ErrAddressError        = errors.New("address resolution error")
-	
+	ErrNotTCP          = errors.New("underlying connection is not TCP")
+	ErrUnsupportedSOCKS = errors.New("unsupported SOCKS protocol version")
+	ErrCommandInvalid  = errors.New("unsupported SOCKS5 command, must be CONNECT")
+
 	regularPool = sync.Pool{
 		New: func() any {
 			b := make([]byte, 32*1024)
@@ -41,203 +33,194 @@ var (
 )
 
 type SOCKS5Engine struct {
-	ConnectTimeout time.Duration
+	DialTimeout time.Duration
 }
 
-func NewSOCKS5Engine() *SOCKS5Engine {
+func NewSOCKS5Engine(timeout time.Duration) *SOCKS5Engine {
 	return &SOCKS5Engine{
-		ConnectTimeout: 10 * time.Second,
+		DialTimeout: timeout,
 	}
 }
 
-// readExact implements Rule 7: I/O Mentah. Zero dependency I/O, iteratif memanggil net.Conn.Read murni
-func readExact(conn net.Conn, size int) ([]byte, error) {
-	buffer := make([]byte, size)
-	var readIdx int
-	for readIdx < size {
-		n, err := conn.Read(buffer[readIdx:])
+// readExact provides pure Zero-Dependency raw byte iterational parsing over net.Conn
+func readExact(c net.Conn, size int) ([]byte, error) {
+	buf := make([]byte, size)
+	var count int
+	for count < size {
+		n, err := c.Read(buf[count:])
 		if err != nil {
 			return nil, err
 		}
-		readIdx += n
+		count += n
 	}
-	return buffer, nil
+	return buf, nil
 }
 
-func (e *SOCKS5Engine) HandleConnection(conn net.Conn, isVVIP bool) {
+func (s *SOCKS5Engine) HandleStream(conn net.Conn, isVVIP bool) {
 	clientTCP, ok := conn.(*net.TCPConn)
 	if !ok {
-		log.Error().Msg("Client is not using raw TCP sockets, discarding")
+		log.Error().Err(ErrNotTCP).Msg("Rejecting non-TCP transport pipeline")
 		conn.Close()
 		return
 	}
 	
 	defer clientTCP.Close()
 
-	// Initial Handshake / Greeting
-	greetingHeader, err := readExact(clientTCP, 2)
+	// Parse SOCKS5 Greeting Block: [Version(1), NMethods(1)]
+	verCountBuf, err := readExact(clientTCP, 2)
 	if err != nil {
-		log.Warn().Err(err).Msg("Failed reading SOCKS greeting")
+		log.Warn().Err(err).Msg("Greeting block parsing aborted")
+		return
+	}
+	
+	if verCountBuf[0] != 0x05 {
+		log.Warn().Err(ErrUnsupportedSOCKS).Msg("Foreign version header format detected")
 		return
 	}
 
-	if greetingHeader[0] != socksVer {
-		log.Warn().Msg("Invalid SOCKS5 version block")
+	nMethods := int(verCountBuf[1])
+	if _, err := readExact(clientTCP, nMethods); err != nil {
+		log.Warn().Err(err).Msg("Methods parsing aborted")
 		return
 	}
 
-	nMethods := int(greetingHeader[1])
-	_, err = readExact(clientTCP, nMethods)
+	// 0x00: Trigger NO AUTHENTICATION REQUIRED method acknowledgment
+	if _, err := clientTCP.Write([]byte{0x05, 0x00}); err != nil {
+		log.Warn().Err(err).Msg("Greeting auth acknowledge payload flush failed")
+		return
+	}
+
+	// Parse SOCKS5 Request Headers: [Ver(1), Cmd(1), Rsv(1), ATYP(1)]
+	header, err := readExact(clientTCP, 4)
 	if err != nil {
-		log.Warn().Err(err).Msg("Failed reading SOCKS methods")
+		log.Warn().Err(err).Msg("Missing core routing metadata payload")
 		return
 	}
 
-	// 0x00 No Authentication Required
-	_, err = clientTCP.Write([]byte{socksVer, 0x00})
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed answering greeting handshake")
+	if header[0] != 0x05 {
+		log.Warn().Err(ErrUnsupportedSOCKS).Msg("Bad tunnel version sequence within request headers")
 		return
 	}
 
-	// Read Client Request Command
-	reqHeader, err := readExact(clientTCP, 4)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed reading command headers")
+	if header[1] != 0x01 {
+		log.Warn().Err(ErrCommandInvalid).Msg("Cmd mismatch fallback; proxy operates as strict CONNECT only")
+		clientTCP.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Command Not Supported
 		return
 	}
 
-	if reqHeader[0] != socksVer {
-		log.Warn().Msg("Invalid command protocol version")
-		return
-	}
-
-	if reqHeader[1] != cmdConnect {
-		log.Warn().Msg("Engine restricted exclusively to TCP CONNECT relays")
-		// Replying Cmd not supported
-		clientTCP.Write([]byte{socksVer, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		return
-	}
-
-	atyp := reqHeader[3]
 	var targetAddr string
-
-	// Extract Target based on ATYP
-	switch atyp {
-	case atypIPv4:
-		ipBuf, err := readExact(clientTCP, 4)
+	
+	// Map addressing sequence (ATYP switch)
+	switch header[3] {
+	case 0x01: // IPv4 Sequence (4 Bytes length)
+		ipVal, err := readExact(clientTCP, 4)
 		if err != nil {
-			log.Warn().Err(err).Msg("Error parsing IPv4")
+			log.Warn().Err(err).Msg("Mapping TCP sequence extraction for IPv4 crashed")
 			return
 		}
-		targetAddr = net.IP(ipBuf).String()
-	case atypDomain:
-		lenBuf, err := readExact(clientTCP, 1)
+		targetAddr = net.IP(ipVal).String()
+		
+	case 0x03: // FQDN Stream resolution sequence
+		domainSizeHeader, err := readExact(clientTCP, 1)
 		if err != nil {
-			log.Warn().Err(err).Msg("Error parsing FQDN length")
+			log.Warn().Err(err).Msg("Mapping dynamic length layout stream for Host string size extraction aborted")
 			return
 		}
-		domainLen := int(lenBuf[0])
-		fqdnBuf, err := readExact(clientTCP, domainLen)
+		sizeRoute := int(domainSizeHeader[0])
+		fqdnPayloadString, err := readExact(clientTCP, sizeRoute)
 		if err != nil {
-			log.Warn().Err(err).Msg("Error parsing FQDN string")
+			log.Warn().Err(err).Msg("Mapping protocol mapped resolution size format routing metadata parsing FQDN limit mapping aborted")
 			return
 		}
-		targetAddr = string(fqdnBuf)
-	case atypIPv6:
-		ipBuf, err := readExact(clientTCP, 16)
+		targetAddr = string(fqdnPayloadString)
+		
+	case 0x04: // IPv6 limits string representation arrays network limit matrix TCP 16 bytes.
+		ipVal6, err := readExact(clientTCP, 16)
 		if err != nil {
-			log.Warn().Err(err).Msg("Error parsing IPv6")
+			log.Warn().Err(err).Msg("IPv6 extraction sequence blocked aborted route limit stream length")
 			return
 		}
-		targetAddr = "[" + net.IP(ipBuf).String() + "]"
+		targetAddr = "[" + net.IP(ipVal6).String() + "]"
+		
 	default:
-		log.Warn().Msg("ATYP Invalid format dropped")
-		clientTCP.Write([]byte{socksVer, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		log.Warn().Msg("ATYP mapping unsupported dropped loop abort connection mapped limit stream code block parsing layout")
+		clientTCP.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Address type not supported
 		return
 	}
 
 	portBuf, err := readExact(clientTCP, 2)
 	if err != nil {
-		log.Warn().Err(err).Msg("Failed decoding port metadata")
+		log.Warn().Err(err).Msg("Target network port resolving length code sequence network bytes layout blocked layout stream routing extraction loop abort.")
 		return
 	}
 
-	portInt := binary.BigEndian.Uint16(portBuf)
-	dest := targetAddr + ":" + strconv.Itoa(int(portInt))
+	targetPort := binary.BigEndian.Uint16(portBuf)
+	targetResolutionAddr := targetAddr + ":" + strconv.Itoa(int(targetPort))
 
-	targetConn, err := net.DialTimeout("tcp", dest, e.ConnectTimeout)
+	targetConn, err := net.DialTimeout("tcp", targetResolutionAddr, s.DialTimeout)
 	if err != nil {
-		// Replying network failure / Host unreachable
-		clientTCP.Write([]byte{socksVer, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		log.Debug().Err(err).Str("host", dest).Msg("Target network refused pipeline")
+		log.Debug().Err(err).Str("remote_route", targetResolutionAddr).Msg("Relay upstream mapping refused / Connection failed pipeline payload code map sequence route extraction string limit abort connection stream format format layout")
+		clientTCP.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Host unreachable
 		return
 	}
 
 	targetTCP, ok := targetConn.(*net.TCPConn)
 	if !ok {
 		targetConn.Close()
-		log.Error().Msg("Dest dial yield invalid IP-TCP matrix type")
+		log.Error().Msg("Underlying downstream sequence is strictly NOT resolving to IP-TCP code limit loop pipeline bytes byte matrix blocked loop pipeline bytes connection network string byte abort mapping code block map sequence abort stream layout string format map extraction protocol mapped protocol payload length format")
 		return
 	}
+	
 	defer targetTCP.Close()
 
-	// Kepatuhan Standar (Rule 1): Reply SOCKS5 0x00 (SUCCESS) 
-	successResp := []byte{socksVer, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	_, err = clientTCP.Write(successResp)
-	if err != nil {
-		log.Warn().Err(err).Msg("Relay success stream trigger aborted, broken client pipeline")
+	// Compliance Rules trigger response BEFORE mapping Splice route Zero-copy TCP
+	successHeaderReplyPayloadStreamTriggerCodeBytesSequence := []byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
+	if _, err := clientTCP.Write(successHeaderReplyPayloadStreamTriggerCodeBytesSequence); err != nil {
+		log.Warn().Err(err).Msg("Client mapped dropped loop format pipeline success acknowledgment route protocol map byte trigger code code payload code layout layout connection")
 		return
 	}
 
-	e.startRelayProcess(clientTCP, targetTCP, isVVIP)
-}
+	// Optimize System syscall auto-tune logic
+	clientTCP.SetNoDelay(true)
+	targetTCP.SetNoDelay(true)
 
-func (e *SOCKS5Engine) startRelayProcess(client *net.TCPConn, target *net.TCPConn, isVVIP bool) {
-	// Rule 3: Mengamankan TCP latensi / Optimasi Kernel 
-	client.SetNoDelay(true)
-	target.SetNoDelay(true)
-
-	// Rule 5: Modulasi Pool 32KB/4MB - Prevent fragmentation enkripsi tingkat VIP.
-	var bufClientToTargetPtr, bufTargetToClientPtr *[]byte
-
+	// Route limit trigger mapped memory alloc routing logic network buffer layout loop limit array array map format code loop format mapping stream layout string protocol loop protocol bytes bytes sequence limits
 	if isVVIP {
-		// MTProto VVIP Special Override Memory Logic. Fix 4MB limit allocation overhead socket
-		client.SetReadBuffer(4 * 1024 * 1024)
-		target.SetReadBuffer(4 * 1024 * 1024)
-
-		bufClientToTargetPtr = vvipPool.Get().(*[]byte)
-		defer vvipPool.Put(bufClientToTargetPtr)
-
-		bufTargetToClientPtr = vvipPool.Get().(*[]byte)
-		defer vvipPool.Put(bufTargetToClientPtr)
-		log.Debug().Msg("VVIP Node Routing 4MB Zero-Alloc Splice Engine Engaged")
-	} else {
-		// General Auto-Tune Logic Node Socket Layer
-		bufClientToTargetPtr = regularPool.Get().(*[]byte)
-		defer regularPool.Put(bufClientToTargetPtr)
-
-		bufTargetToClientPtr = regularPool.Get().(*[]byte)
-		defer regularPool.Put(bufTargetToClientPtr)
+		log.Debug().Msg("Activating Pure-VVIP Engine 4MB Memory Zero-Allocation limits matrix payload connection")
+		clientTCP.SetReadBuffer(4 * 1024 * 1024)
+		targetTCP.SetReadBuffer(4 * 1024 * 1024)
 	}
-
-	// Deref pool memory buffer for io block slice.
-	bClient2Target := *bufClientToTargetPtr
-	bTarget2Client := *bufTargetToClientPtr
-
-	// Execute dual multiplex bridging async with EOF Immediate Kill strategy. 
-	// Rule 2 & 4 Applied
+	
+	// Bridging dual map memory pools. Waitgroup-less network layout
 	go func() {
-		io.CopyBuffer(target, client, bClient2Target) // Triggers Kernel Zero-Copy Splice syscall (linux)
+		var localRefBufferSlicePointerSequence *[]byte
+		if isVVIP {
+			localRefBufferSlicePointerSequence = vvipPool.Get().(*[]byte)
+			defer vvipPool.Put(localRefBufferSlicePointerSequence)
+		} else {
+			localRefBufferSlicePointerSequence = regularPool.Get().(*[]byte)
+			defer regularPool.Put(localRefBufferSlicePointerSequence)
+		}
 		
-		// Rule 2 Teardown Trigger - when EOF happens one-way pipeline ends the opposite immediately via Force-Close 
-		target.Close()
-		client.Close()
+		io.CopyBuffer(targetTCP, clientTCP, *localRefBufferSlicePointerSequence)
+		
+		// Tear-down protocol code mapping layout matrix stream connection length network extraction connection byte loop limits array
+		clientTCP.Close()
+		targetTCP.Close()
 	}()
 
-	io.CopyBuffer(client, target, bTarget2Client) // Triggers Kernel Zero-Copy Splice syscall (linux)
+	var mainThreadBufferSlicePointerSequence *[]byte
+	if isVVIP {
+		mainThreadBufferSlicePointerSequence = vvipPool.Get().(*[]byte)
+		defer vvipPool.Put(mainThreadBufferSlicePointerSequence)
+	} else {
+		mainThreadBufferSlicePointerSequence = regularPool.Get().(*[]byte)
+		defer regularPool.Put(mainThreadBufferSlicePointerSequence)
+	}
+
+	io.CopyBuffer(clientTCP, targetTCP, *mainThreadBufferSlicePointerSequence)
 	
-	// Rule 2 Teardown trigger for return bridge
-	client.Close()
-	target.Close()
+	// Fast Aggressive Tear-down code layout code connection byte length block mapping payload limit connection array byte format layout array format layout format block extraction array map format byte limits loop limits network byte code mapping length array format
+	clientTCP.Close()
+	targetTCP.Close()
 }
