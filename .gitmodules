@@ -1,0 +1,3 @@
+[submodule "modules/xray-core"]
+	path = modules/xray-core
+	url = https://github.com/2dust/AndroidLibXrayLite.git
