@@ -2,92 +2,56 @@ import os
 import sys
 import json
 import urllib.request
-import urllib.error
 
 def main():
-    keys_raw = os.getenv("AI_API_KEYS", "") or os.getenv("GEMINI_API_KEY", "")
-    api_keys = [k.strip() for k in keys_raw.split(",") if k.strip()]
-    
-    if not api_keys:
-        print("Error: Tidak ada API key yang ditemukan di environment variable.")
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("[-] Fatal: GEMINI_API_KEY tidak dikonfigurasi pada GitHub Secrets!")
         sys.exit(1)
-
-    instructions = "Periksa dan perbaiki kode berikut sesuai standar terbaik."
-    if os.path.exists("GEMINI.md"):
-        with open("GEMINI.md", "r", encoding="utf-8") as f:
-            instructions = f.read()
-    elif os.path.exists("AGENTS.md"):
-        with open("AGENTS.md", "r", encoding="utf-8") as f:
-            instructions = f.read()
-
-    target_file = "main.py"
-    code_content = ""
-    if os.path.exists(target_file):
-        with open(target_file, "r", encoding="utf-8") as f:
-            code_content = f.read()
-
-    prompt = f"""
-    {instructions}
-
-    Berikut adalah kode sumber yang harus diproses:
-    ```python
-    {code_content}
-    ```
-    PENTING: Berikan HANYA kode akhirnya saja di dalam blok kode tanpa penjelasan tambahan.
-    """
-
-    # Diubah ke model gemini-3.6-flash sesuai instruksi error API Google
-    url_template = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={}"
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
-    data = json.dumps(payload).encode('utf-8')
-
-    response_text = None
-    for i, key in enumerate(api_keys):
-        try:
-            print(f"Mencoba menggunakan API Key #{i+1} via REST API...")
-            url = url_template.format(key)
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={'Content-Type': 'application/json'},
-                method='POST'
-            )
-            
-            with urllib.request.urlopen(req) as response:
-                res_body = json.loads(response.read().decode('utf-8'))
-                candidate = res_body.get('candidates', [])[0]
-                text = candidate.get('content', {}).get('parts', [])[0].get('text', '')
-                response_text = text.strip()
-                print(f"Berhasil terhubung menggunakan API Key #{i+1}!")
-                break
-        except urllib.error.HTTPError as e:
-            err_message = e.read().decode('utf-8')
-            print(f"API Key #{i+1} gagal (HTTP Error {e.code}: {err_message}). Beralih ke key berikutnya...")
-            continue
-        except Exception as e:
-            print(f"API Key #{i+1} gagal (Error: {e}). Beralih ke key berikutnya...")
-            continue
-
-    if not response_text:
-        print("Error: Semua API key dalam rotasi gagal atau mengalami gangguan.")
+        
+    try:
+        with open("GEMINI.md", 'r', encoding='utf-8') as f:
+            brain = f.read()
+    except FileNotFoundError:
+        print("[-] Fatal: File OTAK (GEMINI.md) tidak ditemukan di root.")
         sys.exit(1)
-
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-
-    with open(target_file, "w", encoding="utf-8") as f:
-        f.write(response_text)
+        
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key={api_key}"
     
-    print(f"File {target_file} berhasil diperbarui secara otomatis!")
+    # Prompt engineering murni: Paksa AI merender AGENTS.md dari GEMINI.md
+    prompt = (
+        "Kamu adalah core engine CI/CD. Baca file otak (GEMINI.md) berikut "
+        "dan hasilkan spesifikasi AI Agents. Output harus format teks/Markdown murni "
+        "yang akan ditulis ke AGENTS.md.\n\n"
+        f"--- OTAK (GEMINI.md) ---\n{brain}"
+    )
+    
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    req = urllib.request.Request(
+        url, 
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}, 
+        method='POST'
+    )
+    
+    print("Mencoba menggunakan API Key #1 via REST API...")
+    try:
+        with urllib.request.urlopen(req) as response:
+            if response.status == 200:
+                print("Berhasil terhubung menggunakan API Key #1!")
+                data = json.loads(response.read().decode('utf-8'))
+                result = data['candidates'][0]['content']['parts'][0]['text']
+                
+                # Tulis output langsung ke AGENTS.md
+                with open("AGENTS.md", 'w', encoding='utf-8') as f:
+                    f.write(result)
+                print("File AGENTS.md berhasil diperbarui secara otomatis!")
+            else:
+                print(f"[-] HTTP Error {response.status}")
+                sys.exit(1)
+    except Exception as e:
+        print(f"[-] Exception saat eksekusi REST API: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
