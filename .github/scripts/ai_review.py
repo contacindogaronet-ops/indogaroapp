@@ -1,6 +1,6 @@
 import os
 import sys
-import google.generativeai as genai
+from google import genai
 
 def main():
     keys_raw = os.getenv("AI_API_KEYS", "") or os.getenv("GEMINI_API_KEY", "")
@@ -38,10 +38,11 @@ def main():
     for i, key in enumerate(api_keys):
         try:
             print(f"Mencoba menggunakan API Key #{i+1}...")
-            genai.configure(api_key=key)
-            # Menggunakan model flash yang stabil
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
+            client = genai.Client(api_key=key)
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt
+            )
             response_text = response.text.strip()
             print(f"Berhasil terhubung menggunakan API Key #{i+1}!")
             break
