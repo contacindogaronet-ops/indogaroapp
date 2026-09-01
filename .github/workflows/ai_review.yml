@@ -18,16 +18,17 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Create venv and Install Dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install google-genai
+          python -m venv venv
+          ./venv/bin/python -m pip install --upgrade pip
+          ./venv/bin/pip install google-genai
 
       - name: Run Script
         env:
           AI_API_KEYS: ${{ secrets.AI_API_KEYS }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python3 .github/scripts/ai_review.py
+        run: ./venv/bin/python .github/scripts/ai_review.py
 
       - name: Commit and Push Changes
         uses: stefanzweifel/git-auto-commit-action@v5
