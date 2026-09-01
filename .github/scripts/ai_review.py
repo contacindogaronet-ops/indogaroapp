@@ -23,8 +23,9 @@ def run_ai_review():
 
     diff_truncated = diff[:5000]
     
-    # URL diupdate menggunakan gemini-3.6-flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={gemini_key}"
+    # Update ke model yang valid dan terbaik saat ini
+    model_name = "gemini-3.1-pro-preview"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     
     prompt = (
         "Kamu adalah Senior Code Reviewer. Tinjau git diff berikut. "
@@ -33,7 +34,13 @@ def run_ai_review():
     )
 
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    headers = {"Content-Type": "application/json"}
+    
+    # PERBAIKAN KEAMANAN: Masukkan API key via Header, bukan di URL!
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": gemini_key
+    }
+    
     response = requests.post(url, json=payload, headers=headers)
     
     if response.status_code == 200:
