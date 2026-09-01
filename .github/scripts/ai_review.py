@@ -22,7 +22,10 @@ def run_ai_review():
         return
 
     diff_truncated = diff[:5000]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+    
+    # URL diupdate menggunakan gemini-3.6-flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={gemini_key}"
+    
     prompt = (
         "Kamu adalah Senior Code Reviewer. Tinjau git diff berikut. "
         "Beri tahu jika ada bug, masalah performa, atau celah keamanan, dan berikan saran perbaikan:\n\n"
