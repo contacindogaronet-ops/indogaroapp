@@ -36,7 +36,8 @@ def main():
     PENTING: Berikan HANYA kode akhirnya saja di dalam blok kode tanpa penjelasan tambahan.
     """
 
-    url_template = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}"
+    # Diubah ke model gemini-3.6-flash sesuai instruksi error API Google
+    url_template = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={}"
     payload = {
         "contents": [{
             "parts": [{"text": prompt}]
