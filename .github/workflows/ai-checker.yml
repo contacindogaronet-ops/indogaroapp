@@ -9,12 +9,15 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2 # Mengambil commit sebelum dan sesudah untuk git diff
+          fetch-depth: 2
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,5 +30,7 @@ jobs:
       - name: Run AI Review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || 'false' }}
         run: python .github/scripts/ai_review.py
-
