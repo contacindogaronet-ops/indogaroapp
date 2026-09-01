@@ -4,10 +4,13 @@ import json
 import urllib.request
 
 def main():
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    # Tarik API Key dan bersihkan dari whitespace/newline (MENCEGAH 404 URL CORRUPTION)
+    raw_api_key = os.getenv("GEMINI_API_KEY")
+    if not raw_api_key:
         print("[-] Fatal: GEMINI_API_KEY tidak dikonfigurasi pada GitHub Secrets!")
         sys.exit(1)
+        
+    api_key = raw_api_key.strip()
         
     try:
         with open("GEMINI.md", 'r', encoding='utf-8') as f:
@@ -16,9 +19,9 @@ def main():
         print("[-] Fatal: File OTAK (GEMINI.md) tidak ditemukan di root.")
         sys.exit(1)
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key={api_key}"
+    # Gunakan model stabil gemini-1.5-pro
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={api_key}"
     
-    # Prompt engineering murni: Paksa AI merender AGENTS.md dari GEMINI.md
     prompt = (
         "Kamu adalah core engine CI/CD. Baca file otak (GEMINI.md) berikut "
         "dan hasilkan spesifikasi AI Agents. Output harus format teks/Markdown murni "
@@ -42,13 +45,18 @@ def main():
                 data = json.loads(response.read().decode('utf-8'))
                 result = data['candidates'][0]['content']['parts'][0]['text']
                 
-                # Tulis output langsung ke AGENTS.md
                 with open("AGENTS.md", 'w', encoding='utf-8') as f:
                     f.write(result)
                 print("File AGENTS.md berhasil diperbarui secara otomatis!")
             else:
                 print(f"[-] HTTP Error {response.status}")
                 sys.exit(1)
+    except urllib.error.HTTPError as e:
+        print(f"[-] HTTP Error: {e.code} - Alasan: {e.reason}")
+        # Tangkap body error untuk debugging presisi
+        error_body = e.read().decode('utf-8')
+        print(f"[-] Detail Error dari Server:\n{error_body}")
+        sys.exit(1)
     except Exception as e:
         print(f"[-] Exception saat eksekusi REST API: {e}")
         sys.exit(1)
