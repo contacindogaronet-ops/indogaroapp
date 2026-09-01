@@ -5,7 +5,6 @@
 
 sync
 echo "⚙️  Merapikan go.mod dan go.sum..."
-go mod tidy
 
 if [ -z "$(git status --porcelain)" ]; then
     echo "✅ Tidak ada perubahan kode baru."
