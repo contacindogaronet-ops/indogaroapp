@@ -34,7 +34,7 @@ class TProxyService : Service() {
         return START_STICKY
     }
 
-    private fun startForegroundNotification() {
+    @android.annotation.SuppressLint("ForegroundServiceType") private fun startForegroundNotification() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
