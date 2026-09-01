@@ -85,7 +85,7 @@ class CoreVpnService : VpnService() {
                 
                 // Execute Native Engine
                 CoreNativeManager.startCore()
-                Tun2SocksControl.start("fd://$fd")
+                Tun2SocksControl.start(fd, 1500, 10808)
                 
                 broadcastState("CONNECTED")
             } else {
