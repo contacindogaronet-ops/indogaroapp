@@ -1,0 +1,34 @@
+name: AI Auto Fixer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-ai:
+    permissions:
+      contents: write
+      
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install google-genai
+
+      - name: Run Script
+        env:
+          AI_API_KEYS: ${{ secrets.AI_API_KEYS }}
+        run: python .github/scripts/ai_fix.py
+
+      - name: Commit and Push Changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: AI automated code fix based on markdown rules"
+          branch: main
+
