@@ -1,6 +1,8 @@
 import os
 import sys
-from google import genai
+import json
+import urllib.request
+import urllib.error
 
 def main():
     keys_raw = os.getenv("AI_API_KEYS", "") or os.getenv("GEMINI_API_KEY", "")
@@ -34,18 +36,37 @@ def main():
     PENTING: Berikan HANYA kode akhirnya saja di dalam blok kode tanpa penjelasan tambahan.
     """
 
+    url_template = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}"
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+    data = json.dumps(payload).encode('utf-8')
+
     response_text = None
     for i, key in enumerate(api_keys):
         try:
-            print(f"Mencoba menggunakan API Key #{i+1}...")
-            client = genai.Client(api_key=key)
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt
+            print(f"Mencoba menggunakan API Key #{i+1} via REST API...")
+            url = url_template.format(key)
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
             )
-            response_text = response.text.strip()
-            print(f"Berhasil terhubung menggunakan API Key #{i+1}!")
-            break
+            
+            with urllib.request.urlopen(req) as response:
+                res_body = json.loads(response.read().decode('utf-8'))
+                candidate = res_body.get('candidates', [])[0]
+                text = candidate.get('content', {}).get('parts', [])[0].get('text', '')
+                response_text = text.strip()
+                print(f"Berhasil terhubung menggunakan API Key #{i+1}!")
+                break
+        except urllib.error.HTTPError as e:
+            err_message = e.read().decode('utf-8')
+            print(f"API Key #{i+1} gagal (HTTP Error {e.code}: {err_message}). Beralih ke key berikutnya...")
+            continue
         except Exception as e:
             print(f"API Key #{i+1} gagal (Error: {e}). Beralih ke key berikutnya...")
             continue
