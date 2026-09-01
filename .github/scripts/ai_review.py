@@ -23,8 +23,8 @@ def run_ai_review():
 
     diff_truncated = diff[:5000]
     
-    # Update ke model yang valid dan terbaik saat ini
-    model_name = "gemini-3.1-pro-preview"
+    # Kembali ke model Flash agar 100% Gratis tanpa limit 0
+    model_name = "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     
     prompt = (
@@ -34,8 +34,6 @@ def run_ai_review():
     )
 
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    
-    # PERBAIKAN KEAMANAN: Masukkan API key via Header, bukan di URL!
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": gemini_key
@@ -49,7 +47,6 @@ def run_ai_review():
         print("\n================= AI CODE REVIEW =================\n")
         print(review_text)
         
-        # Eksekusi komentar ke PR jika ada
         if github_token and repo and pr_number and pr_number != "false":
             post_comment_to_pr(review_text, github_token, repo, pr_number)
     else:
