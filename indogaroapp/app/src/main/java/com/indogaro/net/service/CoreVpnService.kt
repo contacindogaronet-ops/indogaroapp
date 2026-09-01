@@ -1,171 +1,128 @@
 package com.indogaro.net.service
-import androidx.core.app.NotificationCompat
 
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
-import androidx.core.app.NotificationCompat
+import android.util.Log
 import com.indogaro.net.contracts.Tun2SocksControl
 import com.indogaro.net.core.CoreNativeManager
-import com.indogaro.net.util.LogUtil
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 
 class CoreVpnService : VpnService() {
-
-    companion object {
-        const val ACTION_VPN_STATE = "com.indogaro.net.VPN_STATE"
-        const val EXTRA_STATE = "state"
-        
-        const val STATE_CONNECTING = "CONNECTING"
-        const val STATE_CONNECTED = "CONNECTED"
-        const val STATE_STOPPED = "STOPPED"
-        
-        const val NOTIFICATION_ID = 101
-        const val CHANNEL_ID = "jargo_vpn_channel"
-    }
-
+    private val TAG = "CoreVpnService"
+    private val NOTIFICATION_ID = 1185
+    private val CHANNEL_ID = "indogaro_vpn_channel"
+    
     private var vpnInterface: ParcelFileDescriptor? = null
-    private val isRunning = AtomicBoolean(false)
-
-    override fun onCreate() {
-        super.onCreate()
-        LogUtil.d("CoreVpnService: onCreate initialized")
-    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        LogUtil.d("CoreVpnService: onStartCommand triggered")
-        
-        if (intent?.action == "STOP") {
-            stopVpnService()
-            return START_NOT_STICKY
-        }
-
-        if (isRunning.compareAndSet(false, true)) {
-            startForeground(NOTIFICATION_ID, createNotification("Connecting..."))
-            broadcastState(STATE_CONNECTING)
-            
-            thread(start = true, name = "VpnSetupThread") {
-                setupVpnInterface()
-            }
-        }
-        
+        Log.i(TAG, "Starting CoreVpnService...")
+        startForegroundNotification()
+        setupVpn()
         return START_STICKY
     }
 
-    private fun setupVpnInterface() {
-        try {
-            val builder = Builder()
-                .setSession("JARGO-Core")
-                .setMtu(1500)
-                .addAddress("26.26.26.1", 24)
-                .addAddress("fdfe:dcba:9876::1", 126)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                .setBlocking(false)
-
-            try {
-                builder.addDisallowedApplication(packageName)
-            } catch (e: PackageManager.NameNotFoundException) {
-                LogUtil.e("CoreVpnService: Failed to exclude own package - ${e.message}")
-            }
-
-            vpnInterface = builder.establish()
-            val fd = vpnInterface?.fd ?: throw IllegalStateException("Failed to establish VPN interface (fd is null)")
-
-            LogUtil.d("CoreVpnService: VPN Interface established. FD: $fd")
-
-            val coreStarted = CoreNativeManager.startCore()
-            if (!coreStarted) {
-                throw IllegalStateException("Golang Core Engine failed to start")
-            }
-
-            val tunStarted = Tun2SocksControl.start(fd, 1500, 10808)
-            if (!tunStarted) {
-                throw IllegalStateException("Tun2Socks Engine failed to start")
-            }
-
-            LogUtil.d("CoreVpnService: All engines started successfully")
-            updateNotification("Connected")
-            broadcastState(STATE_CONNECTED)
-
-        } catch (e: Exception) {
-            LogUtil.e("CoreVpnService: Critical Setup Failure -> ${e.message}")
-            stopVpnService()
+    private fun startForegroundNotification() {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Indogaro VPN Service",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            manager.createNotificationChannel(channel)
         }
+
+        // MENGGUNAKAN NATIVE BUILDER (Bebas AndroidX / Anti Unresolved Reference)
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+
+        val notification = builder
+            .setContentTitle("Indogaro Network")
+            .setContentText("VPN Service is routing traffic...")
+            .setSmallIcon(android.R.drawable.ic_secure) // Default icon for safety
+            .setOngoing(true)
+            .build()
+
+        startForeground(NOTIFICATION_ID, notification)
     }
 
-    private fun stopVpnService() {
-        if (!isRunning.get()) return
-        LogUtil.d("CoreVpnService: Stopping VPN Service...")
-        
+    private fun setupVpn() {
+        broadcastState("CONNECTING")
         try {
-            Tun2SocksControl.stop()
-            CoreNativeManager.stopCore()
+            val builder = Builder()
+            builder.setMtu(1500)
+            builder.addAddress("172.19.0.2", 24) // Dummy local IP
             
-            vpnInterface?.close()
-            vpnInterface = null
+            // Route All IPv4 & IPv6
+            builder.addRoute("0.0.0.0", 0)
+            builder.addRoute("::", 0)
+            
+            // Bypass app itself to prevent routing loop
+            try {
+                builder.addDisallowedApplication(packageName)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to exclude package", e)
+            }
+            
+            builder.setBlocking(false)
+            builder.setSession("IndogaroVPN")
+
+            vpnInterface = builder.establish()
+            
+            if (vpnInterface != null) {
+                val fd = vpnInterface!!.fd
+                Log.i(TAG, "VPN Interface established with FD: $fd")
+                
+                // Execute Native Engine
+                CoreNativeManager.startCore()
+                Tun2SocksControl.start("fd://$fd")
+                
+                broadcastState("CONNECTED")
+            } else {
+                throw IllegalStateException("Failed to establish VPN interface (null)")
+            }
         } catch (e: Exception) {
-            LogUtil.e("CoreVpnService: Error during teardown -> ${e.message}")
-        } finally {
-            isRunning.set(false)
-            broadcastState(STATE_STOPPED)
-            stopForeground(true)
+            Log.e(TAG, "Fatal Error configuring VPN", e)
+            broadcastState("STOPPED")
             stopSelf()
         }
     }
 
-    override fun onRevoke() {
-        LogUtil.d("CoreVpnService: onRevoke called by OS")
-        stopVpnService()
-        super.onRevoke()
-    }
-
     override fun onDestroy() {
-        LogUtil.d("CoreVpnService: onDestroy")
-        stopVpnService()
+        Log.i(TAG, "Destroying CoreVpnService...")
+        Tun2SocksControl.stop()
+        CoreNativeManager.stopCore()
+        
+        try {
+            vpnInterface?.close()
+            vpnInterface = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing VPN interface", e)
+        }
+        
+        broadcastState("STOPPED")
         super.onDestroy()
     }
 
+    override fun onRevoke() {
+        Log.w(TAG, "VPN Permission revoked by OS")
+        stopSelf()
+        super.onRevoke()
+    }
+
     private fun broadcastState(state: String) {
-        val intent = Intent(ACTION_VPN_STATE).apply {
-            setPackage(packageName)
-            putExtra(EXTRA_STATE, state)
-        }
+        val intent = Intent("com.indogaro.net.VPN_STATE")
+        intent.putExtra("state", state)
         sendBroadcast(intent)
-    }
-
-    private fun createNotification(contentText: String): Notification {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "JARGO VPN Service",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Background service for VPN connection"
-            }
-            notificationManager.createNotificationChannel(channel)
-        }
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Indogaro VPN")
-            .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.ic_secure)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
-    }
-
-    private fun updateNotification(contentText: String) {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID, createNotification(contentText))
     }
 }
