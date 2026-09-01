@@ -23,8 +23,8 @@ def run_ai_review():
 
     diff_truncated = diff[:5000]
     
-    # Kembali ke model Flash agar 100% Gratis tanpa limit 0
-    model_name = "gemini-1.5-flash"
+    # Menggunakan model gemini-3.7-flash terbaru yang powerful untuk coding
+    model_name = "gemini-3.7-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     
     prompt = (
